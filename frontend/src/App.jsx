@@ -17,6 +17,7 @@ function App() {
   ]);
   const [stage, setStage] = useState("awaiting_resume");
   const [resumeText, setResumeText] = useState("");
+  const [sessionId, setSessionId] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [textInput, setTextInput] = useState("");
@@ -44,7 +45,22 @@ function App() {
     try {
       const res = await axios.post(`${API_BASE}/upload-resume`, formData);
       setResumeText(res.data.extracted_text);
-      addMessage("bot", "Got it! Now paste the job description you're targeting.");
+
+      const sessionRes = await axios.post(`${API_BASE}/create-session`);
+      setSessionId(sessionRes.data.session_id);
+
+      const weaknessRes = await axios.get(`${API_BASE}/weakness-history`);
+      if (weaknessRes.data.top_weaknesses.length > 0) {
+        const topTags = weaknessRes.data.top_weaknesses
+          .map((w) => w.tag.replace("_", " "))
+          .join(", ");
+        addMessage(
+          "bot",
+          `📈 Heads up — across your past sessions, you've been marked down most on: ${topTags}. Let's focus on improving these today.`
+        );
+      }
+
+      addMessage("bot", "Now paste the job description you're targeting.");
       setStage("awaiting_jd");
     } catch (err) {
       addMessage("bot", "Something went wrong parsing your resume. Try again.");
@@ -83,10 +99,10 @@ function App() {
         );
 
         const flatQuestions = [
-          ...categorizedQuestions.coding.map(q => ({ ...q, category: "coding" })),
-          ...categorizedQuestions.aptitude.map(q => ({ ...q, category: "aptitude" })),
-          ...categorizedQuestions.hr_behavioral.map(q => ({ ...q, category: "hr_behavioral" })),
-          ...categorizedQuestions.company_specific.map(q => ({ ...q, category: "company_specific" }))
+          ...categorizedQuestions.coding.map((q) => ({ ...q, category: "coding" })),
+          ...categorizedQuestions.aptitude.map((q) => ({ ...q, category: "aptitude" })),
+          ...categorizedQuestions.hr_behavioral.map((q) => ({ ...q, category: "hr_behavioral" })),
+          ...categorizedQuestions.company_specific.map((q) => ({ ...q, category: "company_specific" }))
         ];
 
         setQuestions(flatQuestions);
@@ -102,15 +118,24 @@ function App() {
       addMessage("user", textInput);
       setLoading(true);
       try {
-        const res = await axios.post(`${API_BASE}/answer`, {
+        const isCoding = questions[currentQIndex].category === "coding";
+        const endpoint = isCoding ? "/answer-coding" : "/answer";
+
+        const res = await axios.post(`${API_BASE}${endpoint}`, {
           question: questions[currentQIndex].text,
-          answer: textInput
+          answer: textInput,
+          session_id: sessionId
         });
-        const { score, strengths, improvements, feedback_summary } = res.data;
-        addMessage(
-          "bot",
-          `Score: ${score}/10\n✔ ${strengths.join("\n✔ ")}\n✘ ${improvements.join("\n✘ ")}\n\n${feedback_summary}`
-        );
+
+        let feedbackMsg;
+        if (isCoding) {
+          const { score, correctness, bugs_or_issues, complexity_analysis, improvements, feedback_summary } = res.data;
+          feedbackMsg = `Score: ${score}/10 (${correctness})\n🐛 Issues: ${bugs_or_issues?.join(", ") || "None"}\n⏱️ ${complexity_analysis}\n💡 ${improvements?.join(", ")}\n\n${feedback_summary}`;
+        } else {
+          const { score, strengths, improvements, feedback_summary } = res.data;
+          feedbackMsg = `Score: ${score}/10\n✔ ${strengths.join("\n✔ ")}\n✘ ${improvements.join("\n✘ ")}\n\n${feedback_summary}`;
+        }
+        addMessage("bot", feedbackMsg);
 
         const nextIndex = currentQIndex + 1;
         if (nextIndex < questions.length) {
@@ -133,6 +158,7 @@ function App() {
     setMessages([{ sender: "bot", text: "Hi! Upload your resume to get started (PDF or DOCX)." }]);
     setStage("awaiting_resume");
     setResumeText("");
+    setSessionId(null);
     setQuestions([]);
     setCurrentQIndex(0);
     setTextInput("");
