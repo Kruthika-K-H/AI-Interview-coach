@@ -67,13 +67,65 @@ Return ONLY valid JSON, no markdown, no preamble, in this exact format:
   "score": <integer 1-10>,
   "strengths": ["point1", "point2"],
   "improvements": ["point1", "point2"],
+  "weakness_tags": ["tag1", "tag2"],
   "feedback_summary": "one paragraph overall feedback"
 }}
+
+For weakness_tags, choose from this fixed list only (pick 0-2 that genuinely apply, empty array if none apply):
+["quantification", "structure", "technical_depth", "communication_clarity", "ownership_clarity", "completeness", "confidence"]
 """
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4,
+    )
+    raw_output = response.choices[0].message.content.strip()
+    if raw_output.startswith("```"):
+        raw_output = raw_output.strip("`")
+        raw_output = raw_output.replace("json\n", "", 1).strip()
+    try:
+        result = json.loads(raw_output)
+    except json.JSONDecodeError:
+        result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
+    return result
+
+
+def analyze_coding_answer(question: str, answer: str) -> dict:
+    prompt = f"""You are an expert technical interviewer evaluating a candidate's CODE submission.
+
+CODING QUESTION:
+{question}
+
+CANDIDATE'S CODE/ANSWER:
+{answer}
+
+Evaluate strictly on:
+- Correctness: Does the code actually solve the problem? Would it run without errors?
+- Logic: Is the approach/algorithm sound?
+- Edge cases: Does it handle them (empty input, negative numbers, etc.)?
+- Time/space complexity: Is it efficient, or is there a better approach?
+
+If the code has bugs or wouldn't compile/run, say so explicitly and explain why.
+If the logic is fundamentally wrong, say so — don't be lenient just to be encouraging.
+
+Return ONLY valid JSON, no markdown, no preamble:
+{{
+  "score": <integer 1-10>,
+  "correctness": "correct|partially_correct|incorrect",
+  "bugs_or_issues": ["issue1", "issue2"],
+  "complexity_analysis": "time and space complexity, and whether it's optimal",
+  "weakness_tags": ["tag1", "tag2"],
+  "improvements": ["suggestion1", "suggestion2"],
+  "feedback_summary": "one paragraph overall feedback"
+}}
+
+For weakness_tags, choose from this fixed list only (pick 0-2 that genuinely apply, empty array if none apply):
+["correctness", "efficiency", "edge_cases", "structure", "technical_depth", "completeness"]
+"""
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
     )
     raw_output = response.choices[0].message.content.strip()
     if raw_output.startswith("```"):
@@ -143,7 +195,13 @@ Return ONLY valid JSON, no markdown, no preamble, in this exact format:
   }}
 }}
 
-Generate 3-4 questions per category. For coding/aptitude, infer likely question style from the company/role in the JD (e.g. product-based companies favor DSA, service-based favor aptitude+basics, consulting/analytics roles favor case-study style). For company_specific, use clues from the JD (industry, product, role focus) to generate realistic questions this specific company might ask.
+Generate EXACTLY 3 questions per category — coding, aptitude, hr_behavioral, and company_specific. Do not leave any category empty and do not generate fewer than 3 per category under any circumstances.
+
+For 'coding' questions, generate general data structures/algorithms problems (arrays, strings, recursion, sorting, searching, etc.) appropriate to the seniority level — NOT tool-specific scripting tasks like "write a script to connect to X service."
+
+For 'aptitude', generate logical/quantitative reasoning questions typical of campus placement drives.
+
+For 'company_specific', use clues from the JD (industry, product, role focus) to generate realistic questions this specific company might ask.
 
 RESUME:
 {resume_text}
@@ -165,3 +223,17 @@ JOB DESCRIPTION:
     except json.JSONDecodeError:
         result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
     return result
+
+
+from collections import Counter
+
+def get_top_weaknesses(all_tags_lists: list) -> list:
+    """all_tags_lists = list of comma-separated tag strings from past answers"""
+    counter = Counter()
+    for tags_str in all_tags_lists:
+        if tags_str:
+            for tag in tags_str.split(","):
+                tag = tag.strip()
+                if tag:
+                    counter[tag] += 1
+    return counter.most_common(3)
