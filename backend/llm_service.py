@@ -1,8 +1,9 @@
+
 import os
 import json
 import re
 from collections import Counter
-from groq import Groq
+from groq import Groq, BadRequestError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,15 +15,16 @@ MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 
 def _extract_json(text: str):
-    """Pull a JSON object out of model output (handles code fences and extra text)."""
+    """Pull a JSON object out of model output (handles code fences and extra text).
+    strict=False allows raw newlines/tabs inside strings (common in code questions)."""
     text = (text or "").strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
     try:
-        return json.loads(text)
+        return json.loads(text, strict=False)
     except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
         if start != -1 and end > start:
-            return json.loads(text[start:end + 1])
+            return json.loads(text[start:end + 1], strict=False)
         raise
 
 
@@ -33,19 +35,34 @@ def _call_json(prompt: str, temperature: float, max_tokens: int = 4000) -> dict:
         # reasoning model: keep thinking short so it doesn't eat the token budget
         kwargs["reasoning_effort"] = "low"
 
+    use_json_mode = True
     last_raw = ""
-    for _ in range(2):
-        response = client.chat.completions.create(
+    for attempt in range(2):
+        params = dict(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens,
             **kwargs,
         )
-        last_raw = response.choices[0].message.content or ""
+        if use_json_mode:
+            params["response_format"] = {"type": "json_object"}
+        try:
+            response = client.chat.completions.create(**params)
+        except BadRequestError as e:
+            # JSON mode rejected for this model/prompt: retry without it
+            print(f"[llm] BadRequest with json mode: {e}")
+            use_json_mode = False
+            continue
+
+        choice = response.choices[0]
+        last_raw = choice.message.content or ""
         try:
             return _extract_json(last_raw)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"[llm] attempt {attempt + 1} parse failed: {e}; "
+                  f"finish_reason={choice.finish_reason}; "
+                  f"raw_head={last_raw[:300]!r}; raw_tail={last_raw[-200:]!r}")
             continue
     return {"error": "Failed to parse LLM response as JSON", "raw_output": last_raw}
 
