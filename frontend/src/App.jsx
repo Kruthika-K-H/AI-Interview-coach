@@ -11,6 +11,9 @@ const categoryLabels = {
   company_specific: "🏢 Company-Specific"
 };
 
+// Always returns an array, whatever shape the model sent back
+const toList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+
 function App() {
   const [messages, setMessages] = useState([
     { sender: "bot", text: "Hi! Upload your resume to get started (PDF or DOCX)." }
@@ -89,21 +92,35 @@ function App() {
         const { matched_skills, missing_skills } = analyzeRes.data;
         addMessage(
           "bot",
-          `✅ Matched Skills: ${matched_skills.join(", ")}\n⚠️ Missing Skills: ${missing_skills.join(", ")}`
+          `✅ Matched Skills: ${toList(matched_skills).join(", ")}\n⚠️ Missing Skills: ${toList(missing_skills).join(", ")}`
         );
 
-        const { prep_guide, questions: categorizedQuestions } = prepRes.data;
+        const { prep_guide = {}, questions: cq = {} } = prepRes.data;
+
+        const norm = (arr, category) =>
+          toList(arr).map((q) => ({
+            ...(typeof q === "string" ? { text: q } : q),
+            category
+          }));
+
         addMessage(
           "bot",
-          `📚 Topics to study: ${prep_guide.topics_to_study.join(", ")}\n📖 Resources: ${prep_guide.resources.join(", ")}`
+          `📚 Topics to study: ${toList(prep_guide.topics_to_study).join(", ")}\n📖 Resources: ${toList(prep_guide.resources).join(", ")}`
         );
 
         const flatQuestions = [
-          ...categorizedQuestions.coding.map((q) => ({ ...q, category: "coding" })),
-          ...categorizedQuestions.aptitude.map((q) => ({ ...q, category: "aptitude" })),
-          ...categorizedQuestions.hr_behavioral.map((q) => ({ ...q, category: "hr_behavioral" })),
-          ...categorizedQuestions.company_specific.map((q) => ({ ...q, category: "company_specific" }))
+          ...norm(cq.coding, "coding"),
+          ...norm(cq.aptitude, "aptitude"),
+          ...norm(cq.hr_behavioral, "hr_behavioral"),
+          ...norm(cq.company_specific, "company_specific")
         ];
+
+        if (flatQuestions.length === 0) {
+          addMessage("bot", "I couldn't generate questions this time. Please try again.");
+          setLoading(false);
+          setTextInput("");
+          return;
+        }
 
         setQuestions(flatQuestions);
         setCurrentQIndex(0);
@@ -111,6 +128,7 @@ function App() {
         addMessage("bot", `${categoryLabels[flatQuestions[0].category]} Question:\n${flatQuestions[0].text}`);
         setStage("awaiting_answer");
       } catch (err) {
+        console.error("Analyze step failed:", err);
         addMessage("bot", "Something went wrong analyzing. Try again.");
       }
       setLoading(false);
@@ -130,10 +148,10 @@ function App() {
         let feedbackMsg;
         if (isCoding) {
           const { score, correctness, bugs_or_issues, complexity_analysis, improvements, feedback_summary } = res.data;
-          feedbackMsg = `Score: ${score}/10 (${correctness})\n🐛 Issues: ${bugs_or_issues?.join(", ") || "None"}\n⏱️ ${complexity_analysis}\n💡 ${improvements?.join(", ")}\n\n${feedback_summary}`;
+          feedbackMsg = `Score: ${score}/10 (${correctness})\n🐛 Issues: ${toList(bugs_or_issues).join(", ") || "None"}\n⏱️ ${complexity_analysis}\n💡 ${toList(improvements).join(", ")}\n\n${feedback_summary}`;
         } else {
           const { score, strengths, improvements, feedback_summary } = res.data;
-          feedbackMsg = `Score: ${score}/10\n✔ ${strengths.join("\n✔ ")}\n✘ ${improvements.join("\n✘ ")}\n\n${feedback_summary}`;
+          feedbackMsg = `Score: ${score}/10\n✔ ${toList(strengths).join("\n✔ ")}\n✘ ${toList(improvements).join("\n✘ ")}\n\n${feedback_summary}`;
         }
         addMessage("bot", feedbackMsg);
 
@@ -146,6 +164,7 @@ function App() {
           setStage("done");
         }
       } catch (err) {
+        console.error("Scoring step failed:", err);
         addMessage("bot", "Something went wrong scoring your answer. Try again.");
       }
       setLoading(false);
