@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Depends
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -88,18 +88,24 @@ class AnalyzeRequest(BaseModel):
 @app.post("/analyze")
 async def analyze(request: AnalyzeRequest):
     result = analyze_resume_jd(request.resume_text, request.jd_text)
+    if "error" in result:
+        raise HTTPException(status_code=502, detail=result["error"])
     return result
 
 
 @app.post("/ats-score")
 async def ats_score(request: AnalyzeRequest):
     result = calculate_ats_score(request.resume_text, request.jd_text)
+    if "error" in result:
+        raise HTTPException(status_code=502, detail=result["error"])
     return result
 
 
 @app.post("/prep-guide")
 async def prep_guide(request: AnalyzeRequest):
     result = generate_prep_guide(request.resume_text, request.jd_text)
+    if "error" in result:
+        raise HTTPException(status_code=502, detail=result["error"])
     return result
 
 

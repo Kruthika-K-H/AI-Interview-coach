@@ -1,13 +1,53 @@
 import os
 import json
+import re
+from collections import Counter
 from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+client = Groq(api_key=os.getenv("GROQ_API_KEY"), max_retries=4)
 
-MODEL = "openai/gpt-oss-20b"
+# Override on Render with a GROQ_MODEL env var if the model is ever retired again
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+
+
+def _extract_json(text: str):
+    """Pull a JSON object out of model output (handles code fences and extra text)."""
+    text = (text or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
+def _call_json(prompt: str, temperature: float, max_tokens: int = 4000) -> dict:
+    """Call Groq and return parsed JSON. Retries once if the output is empty/unparseable."""
+    kwargs = {}
+    if "gpt-oss" in MODEL:
+        # reasoning model: keep thinking short so it doesn't eat the token budget
+        kwargs["reasoning_effort"] = "low"
+
+    last_raw = ""
+    for _ in range(2):
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+        last_raw = response.choices[0].message.content or ""
+        try:
+            return _extract_json(last_raw)
+        except json.JSONDecodeError:
+            continue
+    return {"error": "Failed to parse LLM response as JSON", "raw_output": last_raw}
 
 
 def analyze_resume_jd(resume_text: str, jd_text: str) -> dict:
@@ -35,20 +75,7 @@ RESUME:
 JOB DESCRIPTION:
 {jd_text}
 """
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-    )
-    raw_output = response.choices[0].message.content.strip()
-    if raw_output.startswith("```"):
-        raw_output = raw_output.strip("`")
-        raw_output = raw_output.replace("json\n", "", 1).strip()
-    try:
-        result = json.loads(raw_output)
-    except json.JSONDecodeError:
-        result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
-    return result
+    return _call_json(prompt, temperature=0.4)
 
 
 def analyze_answer(question: str, answer: str) -> dict:
@@ -74,20 +101,7 @@ Return ONLY valid JSON, no markdown, no preamble, in this exact format:
 For weakness_tags, choose from this fixed list only (pick 0-2 that genuinely apply, empty array if none apply):
 ["quantification", "structure", "technical_depth", "communication_clarity", "ownership_clarity", "completeness", "confidence"]
 """
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-    )
-    raw_output = response.choices[0].message.content.strip()
-    if raw_output.startswith("```"):
-        raw_output = raw_output.strip("`")
-        raw_output = raw_output.replace("json\n", "", 1).strip()
-    try:
-        result = json.loads(raw_output)
-    except json.JSONDecodeError:
-        result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
-    return result
+    return _call_json(prompt, temperature=0.4)
 
 
 def analyze_coding_answer(question: str, answer: str) -> dict:
@@ -122,20 +136,7 @@ Return ONLY valid JSON, no markdown, no preamble:
 For weakness_tags, choose from this fixed list only (pick 0-2 that genuinely apply, empty array if none apply):
 ["correctness", "efficiency", "edge_cases", "structure", "technical_depth", "completeness"]
 """
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-    )
-    raw_output = response.choices[0].message.content.strip()
-    if raw_output.startswith("```"):
-        raw_output = raw_output.strip("`")
-        raw_output = raw_output.replace("json\n", "", 1).strip()
-    try:
-        result = json.loads(raw_output)
-    except json.JSONDecodeError:
-        result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
-    return result
+    return _call_json(prompt, temperature=0.2)
 
 
 def calculate_ats_score(resume_text: str, jd_text: str) -> dict:
@@ -160,20 +161,7 @@ RESUME:
 JOB DESCRIPTION:
 {jd_text}
 """
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
-    raw_output = response.choices[0].message.content.strip()
-    if raw_output.startswith("```"):
-        raw_output = raw_output.strip("`")
-        raw_output = raw_output.replace("json\n", "", 1).strip()
-    try:
-        result = json.loads(raw_output)
-    except json.JSONDecodeError:
-        result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
-    return result
+    return _call_json(prompt, temperature=0.3)
 
 
 def generate_prep_guide(resume_text: str, jd_text: str) -> dict:
@@ -209,23 +197,8 @@ RESUME:
 JOB DESCRIPTION:
 {jd_text}
 """
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-    )
-    raw_output = response.choices[0].message.content.strip()
-    if raw_output.startswith("```"):
-        raw_output = raw_output.strip("`")
-        raw_output = raw_output.replace("json\n", "", 1).strip()
-    try:
-        result = json.loads(raw_output)
-    except json.JSONDecodeError:
-        result = {"error": "Failed to parse LLM response as JSON", "raw_output": raw_output}
-    return result
+    return _call_json(prompt, temperature=0.4)
 
-
-from collections import Counter
 
 def get_top_weaknesses(all_tags_lists: list) -> list:
     """all_tags_lists = list of comma-separated tag strings from past answers"""
